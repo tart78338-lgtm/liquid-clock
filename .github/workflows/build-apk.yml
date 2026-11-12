@@ -21,17 +21,156 @@ jobs:
       - name: Configurar Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Generar Wrapper y Keystore
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Auto-Construir Estructura y Firmar Clave
         run: |
-          gradle wrapper --gradle-version 8.7
-          chmod +x gradlew
-          chmod +x generate-keystore.sh
-          ./generate-keystore.sh
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/java/com/organism/liquidclock
+
+          # Generar Keystore de Producción
+          keytool -genkeypair -v \
+            -keystore release.keystore \
+            -alias liquid_organism_key \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass liquid_organism_pass \
+            -keypass liquid_organism_pass \
+            -dname "CN=LiquidOrganism, OU=Dev, O=App, L=World, S=State, C=US"
+
+          # Configurar settings.gradle.kts
+          cat << 'EOF' > settings.gradle.kts
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "LiquidOrganismClock"
+          include(":app")
+          EOF
+
+          # Configurar build.gradle.kts (Raiz)
+          cat << 'EOF' > build.gradle.kts
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.0" apply false
+          }
+          EOF
+
+          # Configurar gradle.properties
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          EOF
+
+          # Configurar app/build.gradle.kts
+          cat << 'EOF' > app/build.gradle.kts
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.organism.liquidclock"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.organism.liquidclock"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0.0"
+              }
+
+              signingConfigs {
+                  create("release") {
+                      storeFile = file("${rootDir}/release.keystore")
+                      storePassword = "liquid_organism_pass"
+                      keyAlias = "liquid_organism_key"
+                      keyPassword = "liquid_organism_pass"
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                      signingConfig = signingConfigs.getByName("release")
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+
+          dependencies {
+              implementation("androidx.core:core-ktx:1.13.1")
+              implementation("androidx.appcompat:appcompat:1.7.0")
+          }
+          EOF
+
+          # Configurar Manifest
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+              <application
+                  android:allowBackup="true"
+                  android:icon="@android:drawable/ic_lock_idle_alarm"
+                  android:label="Liquid Clock"
+                  android:theme="@style/Theme.AppCompat.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          # Configurar recursos y temas
+          cat << 'EOF' > app/src/main/res/values/strings.xml
+          <resources>
+              <string name="app_name">Liquid Clock</string>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/themes.xml
+          <resources>
+              <style name="Theme.LiquidClock" parent="Theme.AppCompat.NoActionBar" />
+          </resources>
+          EOF
+
+          # Mover archivos Kotlin si se guardaron en otras subcarpetas
+          find . -name "*.kt" -not -path "*/app/src/main/java/*" -exec mv {} app/src/main/java/com/organism/liquidclock/ \;
 
       - name: Compilar APK Firmada
-        run: ./gradlew assembleRelease --no-daemon
+        run: gradle assembleRelease --no-daemon --stacktrace
 
-      - name: Subir APK Generada
+      - name: Subir APK Instalable
         uses: actions/upload-artifact@v4
         with:
           name: LiquidClock-APK
